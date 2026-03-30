@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-enum SQLiteError: Error, CustomStringConvertible {
+enum SQLiteError: Error, LocalizedError, CustomStringConvertible {
     case openDatabase(String)
     case execute(String)
     case prepare(String)
@@ -17,6 +17,10 @@ enum SQLiteError: Error, CustomStringConvertible {
              .bind(let message):
             return message
         }
+    }
+
+    var errorDescription: String? {
+        description
     }
 }
 

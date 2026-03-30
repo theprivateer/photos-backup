@@ -1,6 +1,6 @@
 import Foundation
 
-enum PhotosLibraryError: Error, CustomStringConvertible {
+enum PhotosLibraryError: Error, LocalizedError, CustomStringConvertible {
     case invalidLibrary(String)
     case databaseNotFound(String)
 
@@ -9,6 +9,10 @@ enum PhotosLibraryError: Error, CustomStringConvertible {
         case .invalidLibrary(let message), .databaseNotFound(let message):
             return message
         }
+    }
+
+    var errorDescription: String? {
+        description
     }
 }
 

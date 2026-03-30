@@ -16,7 +16,7 @@ struct Config {
     let showHelp: Bool
 }
 
-enum CLIError: Error, CustomStringConvertible {
+enum CLIError: Error, LocalizedError, CustomStringConvertible {
     case missingValue(String)
     case missingRequired(String)
     case invalidValue(flag: String, value: String)
@@ -33,6 +33,10 @@ enum CLIError: Error, CustomStringConvertible {
         case .unknownFlag(let flag):
             return "Unknown flag \(flag)."
         }
+    }
+
+    var errorDescription: String? {
+        description
     }
 }
 
