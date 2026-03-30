@@ -5,6 +5,10 @@ enum Console {
         print(message)
     }
 
+    static func warning(_ message: String) {
+        FileHandle.standardError.write(Data(("warning: " + message + "\n").utf8))
+    }
+
     static func error(_ message: String) {
         FileHandle.standardError.write(Data((message + "\n").utf8))
     }

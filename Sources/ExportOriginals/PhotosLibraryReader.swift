@@ -23,7 +23,7 @@ struct PhotosLibraryReader {
     func loadAssets(since sinceDate: Date?) throws -> [AssetResource] {
         try validateLibrary()
         let originalFiles = try scanOriginalFiles()
-        let metadata = try loadMetadataIndex()
+        let metadata = loadMetadataIndexWithFallback()
         var groupedByFilename = Dictionary(grouping: metadata, by: \.normalizedFilename)
 
         var resources: [AssetResource] = []
@@ -74,6 +74,21 @@ struct PhotosLibraryReader {
                 return $0.stableID < $1.stableID
             }
             return $0.captureDate < $1.captureDate
+        }
+    }
+
+    private func loadMetadataIndexWithFallback() -> [MetadataRow] {
+        do {
+            return try loadMetadataIndex()
+        } catch let error as PhotosLibraryError {
+            Console.warning("\(error.description) Falling back to EXIF and filesystem metadata.")
+            return []
+        } catch let error as SQLiteError {
+            Console.warning("Failed to read Photos metadata database: \(error.description). Falling back to EXIF and filesystem metadata.")
+            return []
+        } catch {
+            Console.warning("Failed to inspect Photos metadata database: \(error.localizedDescription). Falling back to EXIF and filesystem metadata.")
+            return []
         }
     }
 
@@ -135,6 +150,7 @@ struct PhotosLibraryReader {
         let assetTable = try findTable(
             database: database,
             candidates: [
+                TableRequirement(name: "ZASSET", requiredColumns: ["ZUUID"]),
                 TableRequirement(name: "ZGENERICASSET", requiredColumns: ["ZUUID"]),
                 TableRequirement(name: "RKMASTER", requiredColumns: ["UUID"]),
             ]
@@ -149,6 +165,8 @@ struct PhotosLibraryReader {
         let resourceTable = try findOptionalTable(
             database: database,
             candidates: [
+                TableRequirement(name: "ZCLOUDRESOURCE", requiredColumns: ["ZASSET"]),
+                TableRequirement(name: "ZINTERNALRESOURCE", requiredColumns: ["ZASSET"]),
                 TableRequirement(name: "ZASSETRESOURCE", requiredColumns: ["ZASSET"]),
                 TableRequirement(name: "RKRESOURCE", requiredColumns: ["MASTERUUID"]),
             ]
@@ -172,6 +190,7 @@ struct PhotosLibraryReader {
         let assetPKColumn = assetTable.firstExisting(["Z_PK", "MODELID", "ROWID"]) ?? "Z_PK"
         let captureDateColumn = assetTable.firstExisting(["ZDATECREATED", "DATECREATED", "CREATIONDATE"])
         let sortDateColumn = assetTable.firstExisting(["ZSORTTOKEN", "ZADDEDDATE", "IMPORTDATE"])
+        let assetFilenameColumn = assetTable.firstExisting(["ZFILENAME", "FILENAME"])
 
         var joins: [String] = []
         var selects = [
@@ -195,15 +214,17 @@ struct PhotosLibraryReader {
             let joinColumn = additionalTable.firstExisting(["ZASSET", "MASTERMODELID", "VERSIONMODELID"])!
             joins.append("LEFT JOIN \(additionalTable.name) aa ON aa.\(joinColumn) = a.\(assetPKColumn)")
             selects.append("aa.\(filenameColumn) AS original_filename")
+        } else if let assetFilenameColumn {
+            selects.append("a.\(assetFilenameColumn) AS original_filename")
         } else {
             selects.append("NULL AS original_filename")
         }
 
         if let resourceTable {
             let assetJoinColumn = resourceTable.firstExisting(["ZASSET", "MASTERMODELID", "MASTERUUID"])!
-            let resourceFileColumn = resourceTable.firstExisting(["ZFILENAME", "FILENAME", "ZNORMALIZEDFILENAME"])
-            let resourceUUIDColumn = resourceTable.firstExisting(["ZUUID", "UUID"])
-            let resourceTypeColumn = resourceTable.firstExisting(["ZRESOURCETYPE", "RESOURCEKIND"])
+            let resourceFileColumn = resourceTable.firstExisting(["ZFILEPATH", "ZFILENAME", "FILENAME", "ZNORMALIZEDFILENAME"])
+            let resourceUUIDColumn = resourceTable.firstExisting(["ZUUID", "UUID", "ZITEMIDENTIFIER", "ZFINGERPRINT", "ZSTABLEHASH"])
+            let resourceTypeColumn = resourceTable.firstExisting(["ZRESOURCETYPE", "RESOURCEKIND", "ZTYPE"])
             if assetJoinColumn == "MASTERUUID" {
                 joins.append("LEFT JOIN \(resourceTable.name) r ON r.\(assetJoinColumn) = a.\(assetIDColumn)")
             } else {
@@ -233,7 +254,9 @@ struct PhotosLibraryReader {
         while try statement.step() {
             syntheticIndex += 1
             let assetID = statement.string(at: 1) ?? "asset-\(syntheticIndex)"
-            let matchingFilename = statement.string(at: 5) ?? statement.string(at: 4) ?? ""
+            let matchingFilename = normalizedFilenameComponent(statement.string(at: 5))
+                ?? normalizedFilenameComponent(statement.string(at: 4))
+                ?? ""
             let normalizedFilename = matchingFilename.lowercased()
             guard normalizedFilename.isEmpty == false else { continue }
 
@@ -245,7 +268,7 @@ struct PhotosLibraryReader {
                     rowID: Int64(syntheticIndex),
                     assetID: assetID,
                     resourceID: statement.string(at: 6) ?? "\(assetID):\(normalizedFilename)",
-                    originalFilename: statement.string(at: 4) ?? matchingFilename,
+                    originalFilename: normalizedFilenameComponent(statement.string(at: 4)) ?? matchingFilename,
                     normalizedFilename: normalizedFilename,
                     captureDate: captureDate,
                     resourceRole: resourceRole(from: resourceTypeRaw, filename: normalizedFilename)
@@ -350,6 +373,11 @@ struct PhotosLibraryReader {
 
     private func fallbackResourceID(for url: URL, assetID: String) -> String {
         "\(assetID):\(url.lastPathComponent.lowercased())"
+    }
+
+    private func normalizedFilenameComponent(_ raw: String?) -> String? {
+        guard let raw, raw.isEmpty == false else { return nil }
+        return URL(fileURLWithPath: raw).lastPathComponent
     }
 }
 
