@@ -255,6 +255,61 @@ struct PhotosBackupTests {
         #expect(exportedFiles.contains(where: { $0.hasSuffix("_live.mov") }))
     }
 
+    @Test func exporterFallsBackToPackageWideMediaScan() throws {
+        let root = try makeTemporaryDirectory()
+        let library = root.appendingPathComponent("WideScan.photoslibrary", isDirectory: true)
+        let mediaDirectory = library.appendingPathComponent("resources/media/2023/12", isDirectory: true)
+        let databaseDirectory = library.appendingPathComponent("database", isDirectory: true)
+        let destination = root.appendingPathComponent("out", isDirectory: true)
+        let stateURL = root.appendingPathComponent("state.sqlite")
+
+        try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true, attributes: nil)
+        try FileManager.default.createDirectory(at: databaseDirectory, withIntermediateDirectories: true, attributes: nil)
+
+        let photoURL = mediaDirectory.appendingPathComponent("FALLBACK.JPG")
+        try Data("photo".utf8).write(to: photoURL)
+        let fallbackDate = Date(timeIntervalSince1970: 1_703_980_800)
+        try FileManager.default.setAttributes(
+            [
+                .creationDate: fallbackDate,
+                .modificationDate: fallbackDate,
+            ],
+            ofItemAtPath: photoURL.path
+        )
+
+        let database = try SQLiteDatabase(path: databaseDirectory.appendingPathComponent("Photos.sqlite").path)
+        try database.exec(
+            """
+            CREATE TABLE SOMETHING_ELSE (
+                ID INTEGER PRIMARY KEY,
+                VALUE TEXT
+            );
+            INSERT INTO SOMETHING_ELSE(ID, VALUE) VALUES (1, 'x');
+            """
+        )
+
+        let config = Config(
+            libraryURL: library,
+            destinationURL: destination,
+            resumeEnabled: true,
+            verifyMode: .fast,
+            dryRun: false,
+            sinceDate: nil,
+            stateDBURL: stateURL,
+            showHelp: false
+        )
+
+        let summary = try Exporter(config: config).run()
+        #expect(summary.copiedCount == 1)
+
+        let exportedFiles = try FileManager.default.contentsOfDirectory(
+            at: destination.appendingPathComponent("2023/12", isDirectory: true),
+            includingPropertiesForKeys: nil
+        ).map(\.lastPathComponent)
+        #expect(exportedFiles.count == 1)
+        #expect(exportedFiles.first?.hasSuffix(".jpg") == true)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)

@@ -106,13 +106,11 @@ struct PhotosLibraryReader {
         let candidates = [
             libraryURL.appendingPathComponent("originals"),
             libraryURL.appendingPathComponent("Masters"),
+            libraryURL.appendingPathComponent("resources/originals"),
         ]
         let roots = candidates.filter {
             var isDirectory: ObjCBool = false
             return fileManager.fileExists(atPath: $0.path, isDirectory: &isDirectory) && isDirectory.boolValue
-        }
-        guard roots.isEmpty == false else {
-            throw PhotosLibraryError.invalidLibrary("No originals directory found inside \(libraryURL.path)")
         }
 
         var results: [URL] = []
@@ -128,7 +126,60 @@ struct PhotosLibraryReader {
                 results.append(item)
             }
         }
+
+        if results.isEmpty == false {
+            return results
+        }
+
+        let fallbackResults = try scanPackageForMediaFiles()
+        guard fallbackResults.isEmpty == false else {
+            throw PhotosLibraryError.invalidLibrary("No media files found inside \(libraryURL.path)")
+        }
+        Console.warning("No files were found in standard originals folders. Falling back to a package-wide media scan.")
+        return fallbackResults
+    }
+
+    private func scanPackageForMediaFiles() throws -> [URL] {
+        let excludedPrefixes = [
+            "database",
+            "previews",
+            "thumbnails",
+            "resources/derivatives",
+            "resources/proxies",
+            "resources/renders",
+        ]
+
+        var results: [URL] = []
+        let enumerator = fileManager.enumerator(
+            at: libraryURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        while let item = enumerator?.nextObject() as? URL {
+            let relativePath = item.path.replacingOccurrences(of: libraryURL.path + "/", with: "").lowercased()
+            if shouldSkip(relativePath: relativePath, excludedPrefixes: excludedPrefixes) {
+                enumerator?.skipDescendants()
+                continue
+            }
+
+            let values = try item.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+            if values.isDirectory == true {
+                continue
+            }
+            guard values.isRegularFile == true else { continue }
+            guard MetadataResolver.mediaKind(for: item) != .other else { continue }
+            results.append(item)
+        }
+
         return results
+    }
+
+    private func shouldSkip(relativePath: String, excludedPrefixes: [String]) -> Bool {
+        guard relativePath.isEmpty == false else { return false }
+        return excludedPrefixes.contains { prefix in
+            relativePath == prefix || relativePath.hasPrefix(prefix + "/")
+        }
     }
 
     private func libraryDatabaseURL() throws -> URL {
